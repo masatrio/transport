@@ -1,6 +1,7 @@
 package packetio
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -315,6 +316,52 @@ func TestBufferLimitSize(t *testing.T) {
 	// Nothing left.
 	err = buffer.Close()
 	assert.NoError(err)
+}
+
+func TestBufferLimitSizes(t *testing.T) {
+	if sizeHardlimit {
+		t.Skip("skipping since packetioSizeHardlimit is enabled")
+	}
+	sizes := []int{
+		128 * 1024,
+		1024 * 1024,
+		8 * 1024 * 1024,
+	}
+	const headerSize = 2
+	const packetSize = 0x8000
+
+	for _, size := range sizes {
+		size := size
+		t.Run(fmt.Sprintf("%dkbytes", size/1024), func(t *testing.T) {
+			assert := assert.New(t)
+
+			nPackets := size / (packetSize + headerSize)
+
+			buffer := NewBuffer()
+			buffer.SetLimitSize(size + headerSize)
+			now := time.Now()
+			buffer.SetReadDeadline(now.Add(5 * time.Second)) // Set deadline to avoid test deadlock
+
+			for i := 0; i < nPackets; i++ {
+				_, err := buffer.Write(make([]byte, packetSize))
+				assert.NoError(err)
+			}
+
+			// Next write is expected to be errored.
+			_, err := buffer.Write(make([]byte, packetSize))
+			assert.Error(err, ErrFull)
+
+			packet := make([]byte, size)
+			for i := 0; i < nPackets; i++ {
+				n, err := buffer.Read(packet)
+				assert.NoError(err)
+				assert.Equal(packetSize, n)
+				if err != nil {
+					t.FailNow()
+				}
+			}
+		})
+	}
 }
 
 func TestBufferMisc(t *testing.T) {
